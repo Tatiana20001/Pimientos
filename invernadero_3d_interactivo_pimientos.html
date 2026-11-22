@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invernadero 3D Interactivo - Three.js</title>
+    <!-- Tailwind CSS para la interfaz de usuario -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Fuente Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Three.js r128 y OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a241b;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        /* Efecto cristal esmerilado para paneles UI */
+        .glass-panel {
+            background: rgba(20, 28, 22, 0.72);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+        }
+    </style>
+</head>
+<body class="relative w-screen h-screen overflow-hidden">
+
+    <!-- Contenedor del Lienzo 3D -->
+    <div id="canvas-container" class="w-full h-full"></div>
+
+    <!-- Panel Superior: Título e Instrucciones -->
+    <div class="absolute top-4 left-4 right-4 sm:right-auto sm:max-w-sm glass-panel text-white p-4 rounded-2xl shadow-2xl pointer-events-auto transition-all">
+        <div class="flex items-center gap-2.5 mb-1">
+            <span class="inline-block w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></span>
+            <h1 class="text-base sm:text-lg font-bold tracking-tight text-emerald-50">Invernadero Botánico 3D</h1>
+        </div>
+        <p class="text-xs text-stone-300 leading-relaxed">
+            Arrastra para rotar, haz scroll o pellizca para acercar y entrar al invernadero. Usa los controles inferiores para cambiar de vista o abrir accesos.
+        </p>
+    </div>
+
+    <!-- Panel Inferior: Controles de Cámara e Interacción -->
+    <div class="absolute bottom-5 left-1/2 -translate-x-1/2 w-[94%] max-w-2xl flex flex-col gap-2.5 pointer-events-none">
+        
+        <!-- Fila de Acciones del Invernadero -->
+        <div class="flex flex-wrap justify-center gap-2 pointer-events-auto">
+            <button id="btn-door" onclick="toggleDoor()" class="glass-panel hover:bg-emerald-600/40 active:scale-95 text-white text-xs sm:text-sm font-medium px-4 py-2.5 rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer border border-emerald-400/30">
+                <svg class="w-4 h-4 text-emerald-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path></svg>
+                <span id="door-label">Cerrar Puerta</span>
+            </button>
+
+            <button id="btn-vent" onclick="toggleRoofVent()" class="glass-panel hover:bg-sky-600/40 active:scale-95 text-white text-xs sm:text-sm font-medium px-4 py-2.5 rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer border border-sky-400/30">
+                <svg class="w-4 h-4 text-sky-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path></svg>
+                <span id="vent-label">Cerrar Ventana Techo</span>
+            </button>
+        </div>
+
+        <!-- Fila de Vistas de Cámara -->
+        <div class="glass-panel p-1.5 rounded-2xl shadow-2xl flex flex-wrap sm:flex-nowrap justify-center gap-1.5 pointer-events-auto">
+            <button id="cam-exterior" onclick="setCameraView('exterior')" class="cam-btn flex-1 bg-emerald-600 text-white text-xs sm:text-sm font-semibold py-2.5 px-3 rounded-xl shadow transition-all cursor-pointer">
+                Vista Exterior
+            </button>
+            <button id="cam-interior" onclick="setCameraView('interior')" class="cam-btn flex-1 hover:bg-white/10 text-stone-200 text-xs sm:text-sm font-medium py-2.5 px-3 rounded-xl transition-all cursor-pointer">
+                Interior (Entrada)
+            </button>
+            <button id="cam-aerial" onclick="setCameraView('aerial')" class="cam-btn flex-1 hover:bg-white/10 text-stone-200 text-xs sm:text-sm font-medium py-2.5 px-3 rounded-xl transition-all cursor-pointer">
+                Vista Aérea
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // VARIABLES GLOBALES DE LA ESCENA 3D
+        // ==========================================
+        let scene, camera, renderer, controls;
+        let doorPivot, roofVentPivot;
+        let isDoorOpen = true;
+        let isVentOpen = true;
+
+        // Animación de cámara suave entre vistas predefinidas
+        let isCameraTransitioning = false;
+        const targetCamPos = new THREE.Vector3(4.5, 2.9, 5.0);
+        const targetLookAt = new THREE.Vector3(0, 1.0, 0);
+
+        // Referencias a plantas para animación sutil de brisa
+        const animatedPlants = [];
+
+        // ==========================================
+        // INICIALIZACIÓN PRINCIPAL
+        // ==========================================
+        function init() {
+            const container = document.getElementById('canvas-container');
+
+            // Escena con cielo y niebla atmosférica suave
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x9ecae1);
+            scene.fog = new THREE.FogExp2(0x9ecae1, 0.022);
+
+            // Cámara perspectiva
+            camera = new THREE.PerspectiveCamera(
+                48,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                120
+            );
+            camera.position.copy(targetCamPos);
+
+            // Renderizador WebGL con sombras suaves
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.05;
+            container.appendChild(renderer.domElement);
+
+            // Controles orbitales (permite acercarse al interior y navegar libremente)
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.06;
+            controls.target.copy(targetLookAt);
+            controls.minDistance = 0.4;
+            controls.maxDistance = 18;
+            controls.maxPolarAngle = Math.PI * 0.495; // Evita meterse bajo el suelo exterior
+
+            // Si el usuario manipula la cámara manualmente, cancelamos la transición automática
+            controls.addEventListener('start', () => {
+                isCameraTransitioning = false;
+            });
+
+            // Iluminación: luz hemisférica + sol direccional con sombras + relleno suave
+            const hemiLight = new THREE.HemisphereLight(0xdff4ff, 0x4b6b38, 0.85);
+            hemiLight.position.set(0, 20, 0);
+            scene.add(hemiLight);
+
+            const dirLight = new THREE.DirectionalLight(0xfff6e0, 1.35);
+            dirLight.position.set(7, 11, 8);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.camera.near = 1;
+            dirLight.shadow.camera.far = 35;
+            const d = 7.5;
+            dirLight.shadow.camera.left = -d;
+            dirLight.shadow.camera.right = d;
+            dirLight.shadow.camera.top = d;
+            dirLight.shadow.camera.bottom = -d;
+            dirLight.shadow.bias = -0.0005;
+            scene.add(dirLight);
+
+            const fillLight = new THREE.DirectionalLight(0xb8dcff, 0.35);
+            fillLight.position.set(-6, 5, -6);
+            scene.add(fillLight);
+
+            // Construir entorno, estructura del invernadero y cultivos en el suelo
+            buildEnvironment();
+            buildGreenhouse();
+            buildInteriorFurnitureAndPlants();
+
+            // Escuchar redimensionamiento de ventana
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // ==========================================
+        // ENTORNO EXTERIOR: CÉSPED, CAMINO Y ÁRBOLES
+        // ==========================================
+        function buildEnvironment() {
+            // Suelo de césped amplio
+            const groundGeo = new THREE.CircleGeometry(45, 64);
+            const groundMat = new THREE.MeshStandardMaterial({
+                color: 0x76a852,
+                roughness: 0.92,
+                metalness: 0.02
+            });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Pequeñas losas de piedra frente a la entrada (+Z)
+            const stoneMat = new THREE.MeshStandardMaterial({
+                color: 0xc9c5bc,
+                roughness: 0.85
+            });
+            for (let i = 0; i < 4; i++) {
+                const stone = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.68, 0.03, 0.42),
+                    stoneMat
+                );
+                stone.position.set(
+                    Math.sin(i * 1.1) * 0.04,
+                    0.015,
+                    2.28 + i * 0.52
+                );
+                stone.rotation.y = Math.sin(i * 2.3) * 0.04;
+                stone.receiveShadow = true;
+                stone.castShadow = true;
+                scene.add(stone);
+            }
+
+            // Árboles estilizados alrededor para dar contexto de jardín
+            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6e4f37, roughness: 0.9 });
+            const foliageMats = [
+                new THREE.MeshStandardMaterial({ color: 0x4d8238, roughness: 0.8 }),
+                new THREE.MeshStandardMaterial({ color: 0x5c9142, roughness: 0.78 }),
+                new THREE.MeshStandardMaterial({ color: 0x3e6e2c, roughness: 0.85 })
+            ];
+
+            function createTree(x, z, scale = 1, matIdx = 0) {
+                const tree = new THREE.Group();
+                const trunk = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.14 * scale, 0.22 * scale, 1.5 * scale, 8),
+                    trunkMat
+                );
+                trunk.position.y = 0.75 * scale;
+                trunk.castShadow = true;
+                trunk.receiveShadow = true;
+                tree.add(trunk);
+
+                const mat = foliageMats[matIdx % foliageMats.length];
+                const crown1 = new THREE.Mesh(new THREE.DodecahedronGeometry(1.05 * scale, 1), mat);
+                crown1.position.set(0, 2.0 * scale, 0);
+                crown1.castShadow = true;
+                tree.add(crown1);
+
+                const crown2 = new THREE.Mesh(new THREE.DodecahedronGeometry(0.75 * scale, 1), mat);
+                crown2.position.set(0.55 * scale, 1.75 * scale, 0.35 * scale);
+                crown2.castShadow = true;
+                tree.add(crown2);
+
+                tree.position.set(x, 0, z);
+                scene.add(tree);
+            }
+
+            createTree(-4.8, -3.6, 1.25, 0);
+            createTree(0.4, -5.2, 1.4, 1);
+            createTree(5.2, -3.2, 1.15, 2);
+            createTree(-5.6, 1.8, 1.05, 1);
+            createTree(5.8, 2.4, 1.2, 0);
+        }
+
+        // ==========================================
+        // ESTRUCTURA DEL INVERNADERO (ALUMINIO Y VIDRIO)
+        // ==========================================
+        function buildGreenhouse() {
+            const greenhouse = new THREE.Group();
+
+            // Dimensiones generales del invernadero compacto (en metros)
+            const width = 2.7;          // Eje X (-1.35 a +1.35)
+            const length = 3.8;         // Eje Z (-1.90 a +1.90)
+            const wallHeight = 1.62;    // Altura de paredes laterales
+            const roofRise = 0.68;      // Elevación adicional de la cumbrera central
+            const peakHeight = wallHeight + roofRise; // 2.30m
+            const halfW = width / 2;
+            const halfL = length / 2;
+            const frameThick = 0.055;
+
+            // Materiales
+            const aluminumMat = new THREE.MeshStandardMaterial({
+                color: 0xf1f5f9,
+                metalness: 0.25,
+                roughness: 0.35
+            });
+
+            const darkConnectorMat = new THREE.MeshStandardMaterial({
+                color: 0x27303f,
+                metalness: 0.4,
+                roughness: 0.5
+            });
+
+            const basePlinthMat = new THREE.MeshStandardMaterial({
+                color: 0xd6d3cd,
+                roughness: 0.8
+            });
+
+            const floorMat = new THREE.MeshStandardMaterial({
+                color: 0x9e988e,
+                roughness: 0.88
+            });
+
+            // Material de vidrio transparente que permite ver el interior con claridad
+            const glassMat = new THREE.MeshPhysicalMaterial({
+                color: 0xe6f6ff,
+                transparent: true,
+                opacity: 0.24,
+                roughness: 0.08,
+                metalness: 0.05,
+                reflectivity: 0.65,
+                side: THREE.DoubleSide,
+                depthWrite: false // Evita que los cristales oculten plantas u objetos transparentes tras ellos
+            });
+
+            // 1. Zócalo / base perimetral y piso interior
+            const plinthHeight = 0.08;
+            const plinth = new THREE.Mesh(
+                new THREE.BoxGeometry(width + 0.08, plinthHeight, length + 0.08),
+                basePlinthMat
+            );
+            plinth.position.y = plinthHeight / 2;
+            plinth.receiveShadow = true;
+            plinth.castShadow = true;
+            greenhouse.add(plinth);
+
+            const innerFloor = new THREE.Mesh(
+                new THREE.BoxGeometry(width - 0.04, 0.03, length - 0.04),
+                floorMat
+            );
+            innerFloor.position.y = plinthHeight - 0.015;
+            innerFloor.receiveShadow = true;
+            greenhouse.add(innerFloor);
+
+            const startY = plinthHeight;
+            const actualWallH = wallHeight - startY;
+            const actualPeakH = peakHeight - startY;
+            const actualRoofRise = actualPeakH - actualWallH;
+
+            // Ángulo y longitud de cada faldón de techo
+            const roofSlopeAngle = Math.atan2(actualRoofRise, halfW);
+            const roofSlopeLen = Math.hypot(halfW, actualRoofRise);
+
+            // Helper para crear una viga entre dos puntos 3D
+            function createBeamBetween(p1, p2, thickness = frameThick, mat = aluminumMat) {
+                const dir = new THREE.Vector3().subVectors(p2, p1);
+                const len = dir.length();
+                const geo = new THREE.BoxGeometry(thickness, len, thickness);
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.copy(p1).add(p2).multiplyScalar(0.5);
+                mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                return mesh;
+            }
+
+            // 2. Columnas verticales laterales y esquinas
+            const zDivisions = 4; // 5 líneas transversales a lo largo de Z
+            const zPositions = [];
+            for (let i = 0; i <= zDivisions; i++) {
+                zPositions.push(-halfL + (length / zDivisions) * i);
+            }
+
+            zPositions.forEach((zPos, idx) => {
+                // Postes izquierdo y derecho
+                const leftPost = new THREE.Mesh(
+                    new THREE.BoxGeometry(frameThick, actualWallH, frameThick),
+                    aluminumMat
+                );
+                leftPost.position.set(-halfW + frameThick / 2, startY + actualWallH / 2, zPos);
+                leftPost.castShadow = true;
+                leftPost.receiveShadow = true;
+                greenhouse.add(leftPost);
+
+                const rightPost = leftPost.clone();
+                rightPost.position.x = halfW - frameThick / 2;
+                greenhouse.add(rightPost);
+
+                // Conectores oscuros superiores de esquina
+                if (idx === 0 || idx === zDivisions) {
+                    const capL = new THREE.Mesh(
+                        new THREE.BoxGeometry(frameThick * 1.18, frameThick * 1.18, frameThick * 1.18),
+                        darkConnectorMat
+                    );
+                    capL.position.set(-halfW + frameThick / 2, wallHeight, zPos);
+                    greenhouse.add(capL);
+
+                    const capR = capL.clone();
+                    capR.position.x = halfW - frameThick / 2;
+                    greenhouse.add(capR);
+                }
+
+                // Cercha transversal (dos faldones inclinados + tirante horizontal)
+                const eaveLeft = new THREE.Vector3(-halfW + frameThick / 2, wallHeight, zPos);
+                const eaveRight = new THREE.Vector3(halfW - frameThick / 2, wallHeight, zPos);
+                const ridgePt = new THREE.Vector3(0, peakHeight, zPos);
+
+                greenhouse.add(createBeamBetween(eaveLeft, ridgePt, frameThick * 0.92, aluminumMat));
+                greenhouse.add(createBeamBetween(eaveRight, ridgePt, frameThick * 0.92, aluminumMat));
+
+                // Tirante horizontal a la altura del alero en cerchas intermedias y frontales/traseras
+                const tieBeam = createBeamBetween(eaveLeft, eaveRight, frameThick * 0.65, aluminumMat);
+                greenhouse.add(tieBeam);
+            });
+
+            // Viga de cumbrera central superior
+            const ridgeBeam = new THREE.Mesh(
+                new THREE.BoxGeometry(frameThick * 1.1, frameThick * 1.1, length + 0.04),
+                aluminumMat
+            );
+            ridgeBeam.position.set(0, peakHeight + frameThick * 0.3, 0);
+            ridgeBeam.castShadow = true;
+            greenhouse.add(ridgeBeam);
+
+            // Largueros longitudinales en los aleros (izquierdo y derecho)
+            [-halfW + frameThick / 2, halfW - frameThick / 2].forEach(xEdge => {
+                const eaveRail = new THREE.Mesh(
+                    new THREE.BoxGeometry(frameThick, frameThick, length),
+                    aluminumMat
+                );
+                eaveRail.position.set(xEdge, wallHeight, 0);
+                eaveRail.castShadow = true;
+                greenhouse.add(eaveRail);
+
+                // Viga inferior de pared
+                const sillRail = eaveRail.clone();
+                sillRail.position.y = startY + frameThick / 2;
+                greenhouse.add(sillRail);
+            });
+
+            // 3. Hastiales frontal (+Z) y trasero (-Z) con hueco para puerta en el frente
+            const doorWidth = 0.86;
+            const doorHeight = 1.54;
+
+            function buildGableWall(zFace, isFront) {
+                // Viga inferior
+                const bottomSill = new THREE.Mesh(
+                    new THREE.BoxGeometry(width, frameThick, frameThick),
+                    aluminumMat
+                );
+                bottomSill.position.set(0, startY + frameThick / 2, zFace);
+                greenhouse.add(bottomSill);
+
+                // Perfiles inclinados del hastial
+                const leftSlope = createBeamBetween(
+                    new THREE.Vector3(-halfW + frameThick / 2, wallHeight, zFace),
+                    new THREE.Vector3(0, peakHeight, zFace),
+                    frameThick,
+                    aluminumMat
+                );
+                const rightSlope = createBeamBetween(
+                    new THREE.Vector3(halfW - frameThick / 2, wallHeight, zFace),
+                    new THREE.Vector3(0, peakHeight, zFace),
+                    frameThick,
+                    aluminumMat
+                );
+                greenhouse.add(leftSlope, rightSlope);
+
+                // Montante central superior sobre el dintel
+                const topCenterPost = createBeamBetween(
+                    new THREE.Vector3(0, isFront ? startY + doorHeight : wallHeight, zFace),
+                    new THREE.Vector3(0, peakHeight, zFace),
+                    frameThick * 0.75,
+                    aluminumMat
+                );
+                greenhouse.add(topCenterPost);
+
+                if (isFront) {
+                    // Marcos laterales de la puerta y dintel superior
+                    const leftDoorJamb = new THREE.Mesh(
+                        new THREE.BoxGeometry(frameThick * 0.9, doorHeight, frameThick * 0.9),
+                        aluminumMat
+                    );
+                    leftDoorJamb.position.set(-doorWidth / 2, startY + doorHeight / 2, zFace);
+                    leftDoorJamb.castShadow = true;
+
+                    const rightDoorJamb = leftDoorJamb.clone();
+                    rightDoorJamb.position.x = doorWidth / 2;
+
+                    const doorHeader = new THREE.Mesh(
+                        new THREE.BoxGeometry(doorWidth + frameThick, frameThick * 0.9, frameThick * 0.9),
+                        aluminumMat
+                    );
+                    doorHeader.position.set(0, startY + doorHeight, zFace);
+                    doorHeader.castShadow = true;
+
+                    greenhouse.add(leftDoorJamb, rightDoorJamb, doorHeader);
+
+                    // Paneles de vidrio fijos a izquierda y derecha de la puerta
+                    const sideGlassW = halfW - doorWidth / 2 - frameThick * 0.45;
+                    if (sideGlassW > 0.05) {
+                        const gLeft = new THREE.Mesh(
+                            new THREE.BoxGeometry(sideGlassW, actualWallH - 0.02, 0.012),
+                            glassMat
+                        );
+                        gLeft.position.set(-halfW + sideGlassW / 2 + frameThick * 0.4, startY + actualWallH / 2, zFace);
+
+                        const gRight = gLeft.clone();
+                        gRight.position.x = halfW - sideGlassW / 2 - frameThick * 0.4;
+                        greenhouse.add(gLeft, gRight);
+                    }
+                } else {
+                    // Pared trasera completa con montantes y vidrio
+                    [-0.55, 0.55].forEach(mx => {
+                        const hAtX = peakHeight - (Math.abs(mx) / halfW) * actualRoofRise;
+                        const mullion = createBeamBetween(
+                            new THREE.Vector3(mx, startY, zFace),
+                            new THREE.Vector3(mx, hAtX, zFace),
+                            frameThick * 0.65,
+                            aluminumMat
+                        );
+                        greenhouse.add(mullion);
+                    });
+
+                    const backGlass = new THREE.Mesh(
+                        new THREE.BoxGeometry(width - 0.06, actualWallH - 0.02, 0.012),
+                        glassMat
+                    );
+                    backGlass.position.set(0, startY + actualWallH / 2, zFace);
+                    greenhouse.add(backGlass);
+                }
+
+                // Triángulo de vidrio superior del hastial (bajo el techo a dos aguas)
+                const gableShape = new THREE.Shape();
+                gableShape.moveTo(-halfW + 0.03, wallHeight - 0.01);
+                gableShape.lineTo(halfW - 0.03, wallHeight - 0.01);
+                gableShape.lineTo(0, peakHeight - 0.02);
+                gableShape.closePath();
+
+                const gableGlassGeo = new THREE.ShapeGeometry(gableShape);
+                const gableGlass = new THREE.Mesh(gableGlassGeo, glassMat);
+                gableGlass.position.z = zFace;
+                greenhouse.add(gableGlass);
+            }
+
+            buildGableWall(halfL - frameThick / 2, true);
+            buildGableWall(-halfL + frameThick / 2, false);
+
+            // 4. Vidrios laterales y del techo (divididos por tramos para limpiar estética)
+            for (let i = 0; i < zDivisions; i++) {
+                const zA = zPositions[i];
+                const zB = zPositions[i + 1];
+                const segLen = zB - zA - 0.03;
+                const zMid = (zA + zB) / 2;
+
+                // Vidrio pared lateral izquierda
+                const leftWallGlass = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.012, actualWallH - 0.03, segLen),
+                    glassMat
+                );
+                leftWallGlass.position.set(-halfW + frameThick / 2, startY + actualWallH / 2, zMid);
+                greenhouse.add(leftWallGlass);
+
+                // Vidrio pared lateral derecha
+                const rightWallGlass = leftWallGlass.clone();
+                rightWallGlass.position.x = halfW - frameThick / 2;
+                greenhouse.add(rightWallGlass);
+
+                // Faldón de techo izquierdo (inclinado hacia arriba hacia +X)
+                const leftRoofGlass = new THREE.Mesh(
+                    new THREE.BoxGeometry(roofSlopeLen - 0.02, 0.012, segLen),
+                    glassMat
+                );
+                leftRoofGlass.position.set(
+                    -halfW / 2,
+                    wallHeight + actualRoofRise / 2 + 0.015,
+                    zMid
+                );
+                leftRoofGlass.rotation.z = roofSlopeAngle;
+                greenhouse.add(leftRoofGlass);
+
+                // Faldón de techo derecho (en el tramo i === 1 colocamos una ventana abatible interactiva)
+                if (i === 1) {
+                    roofVentPivot = new THREE.Group();
+                    const ventW = roofSlopeLen * 0.52;
+                    const ventD = segLen * 0.82;
+
+                    // Ubicamos el pivote en el borde superior de la ventana, apoyado sobre el faldón derecho
+                    const hingeDistFromRidge = roofSlopeLen * 0.16;
+                    const fracFromRidge = hingeDistFromRidge / roofSlopeLen;
+                    const hingeX = halfW * fracFromRidge;
+                    const hingeY = peakHeight - actualRoofRise * fracFromRidge + 0.018;
+
+                    roofVentPivot.position.set(hingeX, hingeY, zMid);
+
+                    // En coordenadas locales, el marco se extiende desde x = 0 hasta x = ventW (hacia el alero).
+                    // Al tener rotación Z = -roofSlopeAngle, y se inclina hacia abajo siguiendo el faldón derecho.
+                    // Al abrir hacia afuera (levantar la hoja sobre el techo), aumentamos la rotación en +Z.
+                    const closedVentRotZ = -roofSlopeAngle;
+                    const openVentRotZ = -roofSlopeAngle + 0.48;
+
+                    roofVentPivot.userData.closedRotZ = closedVentRotZ;
+                    roofVentPivot.userData.openRotZ = openVentRotZ;
+                    roofVentPivot.rotation.z = isVentOpen ? openVentRotZ : closedVentRotZ;
+
+                    // Marco de la ventana
+                    const frameBarThick = 0.026;
+                    const topBar = new THREE.Mesh(new THREE.BoxGeometry(frameBarThick, 0.024, ventD), aluminumMat);
+                    topBar.position.set(frameBarThick / 2, 0, 0);
+                    topBar.castShadow = true;
+
+                    const botBar = topBar.clone();
+                    botBar.position.set(ventW - frameBarThick / 2, 0, 0);
+
+                    const sideBarA = new THREE.Mesh(new THREE.BoxGeometry(ventW, 0.024, frameBarThick), aluminumMat);
+                    sideBarA.position.set(ventW / 2, 0, -ventD / 2 + frameBarThick / 2);
+                    sideBarA.castShadow = true;
+
+                    const sideBarB = sideBarA.clone();
+                    sideBarB.position.z = ventD / 2 - frameBarThick / 2;
+
+                    const ventGlass = new THREE.Mesh(
+                        new THREE.BoxGeometry(ventW - frameBarThick * 1.5, 0.01, ventD - frameBarThick * 1.5),
+                        glassMat
+                    );
+                    ventGlass.position.set(ventW / 2, 0, 0);
+
+                    // Pequeño brazo de apertura debajo de la hoja
+                    const openerArm = new THREE.Mesh(
+                        new THREE.BoxGeometry(0.12, 0.012, 0.012),
+                        darkConnectorMat
+                    );
+                    openerArm.position.set(ventW * 0.62, -0.022, 0);
+                    openerArm.rotation.z = 0.25;
+
+                    roofVentPivot.add(topBar, botBar, sideBarA, sideBarB, ventGlass, openerArm);
+                    greenhouse.add(roofVentPivot);
+
+                    // Cristal fijo restante alrededor de la ventana
+                    const rightRoofGlass = new THREE.Mesh(
+                        new THREE.BoxGeometry(roofSlopeLen - 0.02, 0.012, segLen),
+                        glassMat
+                    );
+                    rightRoofGlass.position.set(
+                        halfW / 2,
+                        wallHeight + actualRoofRise / 2 + 0.015,
+                        zMid
+                    );
+                    rightRoofGlass.rotation.z = -roofSlopeAngle;
+                    greenhouse.add(rightRoofGlass);
+                } else {
+                    const rightRoofGlass = new THREE.Mesh(
+                        new THREE.BoxGeometry(roofSlopeLen - 0.02, 0.012, segLen),
+                        glassMat
+                    );
+                    rightRoofGlass.position.set(
+                        halfW / 2,
+                        wallHeight + actualRoofRise / 2 + 0.015,
+                        zMid
+                    );
+                    rightRoofGlass.rotation.z = -roofSlopeAngle;
+                    greenhouse.add(rightRoofGlass);
+                }
+            }
+
+            // 5. Puerta abatible frontal con pivote en su jamba izquierda
+            doorPivot = new THREE.Group();
+            const hingeX = -doorWidth / 2 + frameThick * 0.45;
+            const hingeZ = halfL - frameThick / 2;
+            doorPivot.position.set(hingeX, startY, hingeZ);
+
+            const leafW = doorWidth - frameThick * 0.9;
+            const leafH = doorHeight - frameThick * 0.45;
+            const stileW = 0.042;
+
+            // Montante vertical bisagra
+            const leftStile = new THREE.Mesh(
+                new THREE.BoxGeometry(stileW, leafH, 0.036),
+                aluminumMat
+            );
+            leftStile.position.set(stileW / 2, leafH / 2, 0);
+            leftStile.castShadow = true;
+
+            // Montante vertical cerradura
+            const rightStile = leftStile.clone();
+            rightStile.position.x = leafW - stileW / 2;
+
+            // Travesaños superior, intermedio e inferior
+            const topRail = new THREE.Mesh(
+                new THREE.BoxGeometry(leafW, stileW, 0.036),
+                aluminumMat
+            );
+            topRail.position.set(leafW / 2, leafH - stileW / 2, 0);
+            topRail.castShadow = true;
+
+            const midRail = topRail.clone();
+            midRail.position.y = leafH * 0.52;
+
+            const botRail = topRail.clone();
+            botRail.position.y = stileW / 2;
+
+            // Vidrio de la puerta
+            const doorGlass = new THREE.Mesh(
+                new THREE.BoxGeometry(leafW - stileW * 2, leafH - stileW * 2, 0.01),
+                glassMat
+            );
+            doorGlass.position.set(leafW / 2, leafH / 2, 0);
+
+            // Manija metálica oscura
+            const handle = new THREE.Mesh(
+                new THREE.BoxGeometry(0.022, 0.11, 0.065),
+                darkConnectorMat
+            );
+            handle.position.set(leafW - stileW - 0.025, leafH * 0.46, 0.02);
+
+            doorPivot.add(leftStile, rightStile, topRail, midRail, botRail, doorGlass, handle);
+            greenhouse.add(doorPivot);
+
+            scene.add(greenhouse);
+        }
+
+        // ==========================================
+        // CANTEROS EN EL SUELO Y PLANTAS DE PIMIENTO
+        // ==========================================
+        function buildInteriorFurnitureAndPlants() {
+            const lightWoodMat = new THREE.MeshStandardMaterial({
+                color: 0xd4a36a,
+                roughness: 0.72
+            });
+            const walkwayWoodMat = new THREE.MeshStandardMaterial({
+                color: 0xe3b97b,
+                roughness: 0.68
+            });
+            const darkSoilMat = new THREE.MeshStandardMaterial({
+                color: 0x3b2618,
+                roughness: 0.96
+            });
+            const stakeWoodMat = new THREE.MeshStandardMaterial({
+                color: 0xc2955b,
+                roughness: 0.78
+            });
+            const tieRingMat = new THREE.MeshStandardMaterial({
+                color: 0xe5e7eb,
+                roughness: 0.5
+            });
+
+            const stemGreenMat = new THREE.MeshStandardMaterial({
+                color: 0x3b7a2a,
+                roughness: 0.62
+            });
+            const leafGreens = [
+                new THREE.MeshStandardMaterial({ color: 0x2e7d32, roughness: 0.52, side: THREE.DoubleSide }),
+                new THREE.MeshStandardMaterial({ color: 0x388e3c, roughness: 0.50, side: THREE.DoubleSide }),
+                new THREE.MeshStandardMaterial({ color: 0x245e27, roughness: 0.58, side: THREE.DoubleSide })
+            ];
+            const pepperMaterials = [
+                new THREE.MeshStandardMaterial({ color: 0x2e7d32, roughness: 0.35, metalness: 0.04 }), // Pimiento verde
+                new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.30, metalness: 0.05 }), // Pimiento rojo
+                new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.30, metalness: 0.05 })  // Pimiento amarillo
+            ];
+
+            const bedLength = 3.05;
+            const bedZCenter = -0.10;
+            const bedWidth = 0.36;
+            const bedHeight = 0.09;
+            const rowXPositions = [-0.96, -0.46, 0.46, 0.96];
+
+            const walkwaySpecs = [
+                { x: 0.0,   w: 0.48 },
+                { x: -0.71, w: 0.14 },
+                { x: 0.71,  w: 0.14 }
+            ];
+
+            walkwaySpecs.forEach(wk => {
+                const plankCount = Math.floor(bedLength / 0.18);
+                const plankDepth = (bedLength / plankCount) - 0.012;
+                for (let i = 0; i < plankCount; i++) {
+                    const pz = (bedZCenter - bedLength / 2) + (bedLength / plankCount) * (i + 0.5);
+                    const plank = new THREE.Mesh(
+                        new THREE.BoxGeometry(wk.w, 0.025, plankDepth),
+                        walkwayWoodMat
+                    );
+                    plank.position.set(wk.x, 0.038, pz);
+                    plank.receiveShadow = true;
+                    scene.add(plank);
+                }
+            });
+
+            function createSoilBed(xCenter) {
+                const bedGroup = new THREE.Group();
+
+                const soilMesh = new THREE.Mesh(
+                    new THREE.BoxGeometry(bedWidth - 0.04, bedHeight * 0.85, bedLength - 0.04),
+                    darkSoilMat
+                );
+                soilMesh.position.set(0, 0.03 + (bedHeight * 0.85) / 2, 0);
+                soilMesh.receiveShadow = true;
+                bedGroup.add(soilMesh);
+
+                const sideGeo = new THREE.BoxGeometry(0.028, bedHeight, bedLength);
+                const leftBoard = new THREE.Mesh(sideGeo, lightWoodMat);
+                leftBoard.position.set(-bedWidth / 2 + 0.014, 0.03 + bedHeight / 2, 0);
+                leftBoard.castShadow = true;
+                leftBoard.receiveShadow = true;
+
+                const rightBoard = new THREE.Mesh(sideGeo, lightWoodMat);
+                rightBoard.position.set(bedWidth / 2 - 0.014, 0.03 + bedHeight / 2, 0);
+                rightBoard.castShadow = true;
+                rightBoard.receiveShadow = true;
+
+                const endGeo = new THREE.BoxGeometry(bedWidth, bedHeight, 0.028);
+                const frontBoard = new THREE.Mesh(endGeo, lightWoodMat);
+                frontBoard.position.set(0, 0.03 + bedHeight / 2, bedLength / 2 - 0.014);
+                frontBoard.castShadow = true;
+                frontBoard.receiveShadow = true;
+
+                const backBoard = new THREE.Mesh(endGeo, lightWoodMat);
+                backBoard.position.set(0, 0.03 + bedHeight / 2, -bedLength / 2 + 0.014);
+                backBoard.castShadow = true;
+                backBoard.receiveShadow = true;
+
+                bedGroup.add(leftBoard, rightBoard, frontBoard, backBoard);
+                bedGroup.position.set(xCenter, 0, bedZCenter);
+                scene.add(bedGroup);
+            }
+
+            rowXPositions.forEach(rx => createSoilBed(rx));
+
+            function createPepperPlant(x, z, heightScale = 1.0, seed = 0) {
+                const plantRoot = new THREE.Group();
+                const soilTopY = 0.03 + bedHeight * 0.82;
+                const plantHeight = 0.68 * heightScale;
+
+                // Tutor ligero de apoyo para plantas de pimiento
+                const stake = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.007, 0.009, plantHeight * 1.06, 6),
+                    stakeWoodMat
+                );
+                stake.position.set(0.02, soilTopY + (plantHeight * 1.06) * 0.5 - 0.015, -0.012);
+                stake.rotation.z = -0.015;
+                stake.castShadow = true;
+                plantRoot.add(stake);
+
+                const livingPlant = new THREE.Group();
+                livingPlant.position.set(0, soilTopY, 0);
+
+                // Tallo principal ramificado
+                const mainStem = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.008, 0.014, plantHeight * 0.65, 7),
+                    stemGreenMat
+                );
+                mainStem.position.y = plantHeight * 0.325;
+                mainStem.castShadow = true;
+                livingPlant.add(mainStem);
+
+                const tieRing = new THREE.Mesh(
+                    new THREE.TorusGeometry(0.016, 0.0022, 6, 12),
+                    tieRingMat
+                );
+                tieRing.position.set(0.01, plantHeight * 0.42, -0.006);
+                tieRing.rotation.x = Math.PI * 0.45;
+                livingPlant.add(tieRing);
+
+                // Ramas secundarias en Y
+                const branchAngles = [0.4, 2.5, 4.6];
+                branchAngles.forEach((bAng, bIdx) => {
+                    const bLen = (0.14 + (bIdx % 2) * 0.03) * heightScale;
+                    const branch = new THREE.Mesh(
+                        new THREE.CylinderGeometry(0.0045, 0.007, bLen, 6),
+                        stemGreenMat
+                    );
+                    branch.position.set(
+                        Math.cos(bAng) * bLen * 0.35,
+                        plantHeight * 0.56 + bLen * 0.25,
+                        Math.sin(bAng) * bLen * 0.35
+                    );
+                    branch.rotation.z = -Math.cos(bAng) * 0.55;
+                    branch.rotation.x = Math.sin(bAng) * 0.55;
+                    branch.castShadow = true;
+                    livingPlant.add(branch);
+                });
+
+                // Hojas ovaladas características del pimiento
+                const leafLevels = 5;
+                for (let i = 0; i < leafLevels; i++) {
+                    const t = 0.22 + (i / (leafLevels - 1)) * 0.72;
+                    const ly = plantHeight * t;
+                    const baseAngle = seed * 1.7 + i * 2.15;
+                    const leafMat = leafGreens[(i + Math.floor(seed * 3)) % leafGreens.length];
+
+                    const pairCount = i < 4 ? 2 : 1;
+                    for (let p = 0; p < pairCount; p++) {
+                        const ang = baseAngle + p * Math.PI * 0.85;
+                        const reach = (0.085 + (1 - t * 0.35) * 0.05) * heightScale;
+                        const lScale = (1.1 - t * 0.2) * heightScale;
+
+                        const leafletGeo = new THREE.SphereGeometry(0.028 * lScale, 8, 6);
+                        leafletGeo.scale(1.55, 0.14, 0.78);
+                        const leaflet = new THREE.Mesh(leafletGeo, leafMat);
+                        leaflet.position.set(
+                            Math.cos(ang) * reach,
+                            ly,
+                            Math.sin(ang) * reach
+                        );
+                        leaflet.rotation.y = -ang + (p === 0 ? 0.2 : -0.2);
+                        leaflet.rotation.z = (p === 0 ? 0.22 : -0.22);
+                        leaflet.castShadow = true;
+                        livingPlant.add(leaflet);
+                    }
+                }
+
+                // Pimientos colgantes en distintas etapas y colores
+                const pepperSpots = [
+                    { h: 0.34, ang: seed * 1.3 + 0.4, matIdx: 0 },
+                    { h: 0.48, ang: seed * 2.1 + 2.2, matIdx: (Math.floor(seed) % 2 === 0) ? 1 : 0 },
+                    { h: 0.56, ang: seed * 2.8 + 4.1, matIdx: ((Math.floor(seed * 2) + 1) % 3) }
+                ];
+
+                pepperSpots.forEach((spot, pIdx) => {
+                    const py = plantHeight * spot.h;
+                    const dist = 0.052 * heightScale;
+                    const px = Math.cos(spot.ang) * dist;
+                    const pz = Math.sin(spot.ang) * dist;
+
+                    // Pedúnculo / tallo del pimiento
+                    const pedicel = new THREE.Mesh(
+                        new THREE.CylinderGeometry(0.0025, 0.004, 0.025 * heightScale, 5),
+                        stemGreenMat
+                    );
+                    pedicel.position.set(px, py + 0.01, pz);
+                    livingPlant.add(pedicel);
+
+                    // Cuerpo alargado de pimiento
+                    const pepperGeo = new THREE.SphereGeometry(0.019 * heightScale, 10, 10);
+                    pepperGeo.scale(0.85, 1.55, 0.85);
+                    const pepper = new THREE.Mesh(pepperGeo, pepperMaterials[spot.matIdx]);
+                    pepper.position.set(px, py - 0.018 * heightScale, pz);
+                    pepper.rotation.z = Math.cos(spot.ang) * 0.12;
+                    pepper.rotation.x = -Math.sin(spot.ang) * 0.12;
+                    pepper.castShadow = true;
+                    livingPlant.add(pepper);
+                });
+
+                plantRoot.add(livingPlant);
+                plantRoot.position.set(x, 0, z);
+                scene.add(plantRoot);
+
+                animatedPlants.push({ mesh: livingPlant, phase: seed });
+            }
+
+            const plantsPerRow = 6;
+            const zStart = bedZCenter - bedLength / 2 + 0.28;
+            const zStep = (bedLength - 0.56) / (plantsPerRow - 1);
+
+            rowXPositions.forEach((rx, rIdx) => {
+                const isOuterRow = Math.abs(rx) > 0.7;
+                for (let p = 0; p < plantsPerRow; p++) {
+                    const pz = zStart + p * zStep + ((rIdx % 2) * 0.04 - 0.02);
+                    const jitterX = Math.sin(p * 2.7 + rIdx * 1.3) * 0.02;
+                    const baseHeight = isOuterRow ? 0.90 : 1.02;
+                    const hScale = baseHeight + Math.cos(p * 1.9 + rIdx) * 0.08;
+                    createPepperPlant(rx + jitterX, pz, hScale, rIdx * 6 + p * 1.37);
+                }
+            });
+        }
+
+        // ==========================================
+        // CONTROLES DE CÁMARA E INTERACCIÓN UI
+        // ==========================================
+        function setCameraView(viewName) {
+            isCameraTransitioning = true;
+
+            // Actualizar estilos visuales de botones activos
+            document.querySelectorAll('.cam-btn').forEach(btn => {
+                btn.classList.remove('bg-emerald-600', 'font-semibold', 'shadow', 'text-white');
+                btn.classList.add('hover:bg-white/10', 'text-stone-200', 'font-medium');
+            });
+
+            const activeBtn = document.getElementById(`cam-${viewName}`);
+            if (activeBtn) {
+                activeBtn.classList.remove('hover:bg-white/10', 'text-stone-200', 'font-medium');
+                activeBtn.classList.add('bg-emerald-600', 'font-semibold', 'shadow', 'text-white');
+            }
+
+            if (viewName === 'exterior') {
+                targetCamPos.set(4.5, 2.9, 5.0);
+                targetLookAt.set(0, 1.0, 0);
+            } else if (viewName === 'interior') {
+                // Posición justo dentro de la entrada mirando el pasillo central flanqueado por las plantas de pimiento
+                targetCamPos.set(0.0, 0.92, 1.52);
+                targetLookAt.set(0.0, 0.25, -0.95);
+            } else if (viewName === 'aerial') {
+                targetCamPos.set(3.8, 6.2, 4.2);
+                targetLookAt.set(0, 0.8, 0);
+            }
+        }
+
+        function toggleDoor() {
+            isDoorOpen = !isDoorOpen;
+            const label = document.getElementById('door-label');
+            label.textContent = isDoorOpen ? 'Cerrar Puerta' : 'Abrir Puerta';
+        }
+
+        function toggleRoofVent() {
+            isVentOpen = !isVentOpen;
+            const label = document.getElementById('vent-label');
+            label.textContent = isVentOpen ? 'Cerrar Ventana Techo' : 'Abrir Ventana Techo';
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // ==========================================
+        // BUCLE DE ANIMACIÓN PRINCIPAL
+        // ==========================================
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const elapsed = clock.getElapsedTime();
+
+            // 1. Interpolación suave de la puerta
+            const desiredDoorRot = isDoorOpen ? -Math.PI * 0.58 : 0;
+            doorPivot.rotation.y += (desiredDoorRot - doorPivot.rotation.y) * 0.08;
+
+            // 2. Interpolación suave de la ventana del techo (cerrada alineada al faldón, abierta levantada hacia afuera)
+            const closedVentRot = roofVentPivot.userData.closedRotZ ?? 0;
+            const openVentRot = roofVentPivot.userData.openRotZ ?? 0.42;
+            const desiredVentRot = isVentOpen ? openVentRot : closedVentRot;
+            roofVentPivot.rotation.z += (desiredVentRot - roofVentPivot.rotation.z) * 0.08;
+
+            // 3. Brisa suave en las plantas interiores
+            for (let i = 0; i < animatedPlants.length; i++) {
+                const p = animatedPlants[i];
+                p.mesh.rotation.z = Math.sin(elapsed * 1.4 + p.phase) * 0.025;
+                p.mesh.rotation.x = Math.cos(elapsed * 1.1 + p.phase) * 0.02;
+            }
+
+            // 4. Transición fluida de cámara al pulsar los botones de vista
+            if (isCameraTransitioning) {
+                camera.position.lerp(targetCamPos, 0.055);
+                controls.target.lerp(targetLookAt, 0.055);
+                if (camera.position.distanceTo(targetCamPos) < 0.03) {
+                    isCameraTransitioning = false;
+                }
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // Iniciar al cargar la ventana
+        window.onload = function () {
+            init();
+            animate();
+        };
+    </script>
+</body>
+</html>
